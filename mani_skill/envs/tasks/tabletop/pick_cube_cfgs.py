@@ -79,7 +79,10 @@ PICK_CUBE_CONFIGS = {
         "max_goal_height": 0.2,
         "sensor_cam_eye_pos": [0.0, -0.4, 0.6],
         "sensor_cam_target_pos": [0.0, 0.0, 0.05],
-        "human_cam_eye_pos": [0.6, -0.6, 0.6],
+        # The front of the ALOHA workstation (y<0) carries the wormseye mount,
+        # d405 cameras, and angled braces that occlude a front view. Render
+        # from the back-right (+y, +x) and look down at the workspace.
+        "human_cam_eye_pos": [0.6, 0.6, 0.6],
         "human_cam_target_pos": [0.0, 0.0, 0.15],
     },
 }

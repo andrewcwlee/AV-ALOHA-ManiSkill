@@ -73,29 +73,60 @@ class Aloha(BaseAgent):
 
     @property
     def _sensor_configs(self):
-        # ALOHA workstation cameras (overhead + worms-eye), mirrored from
-        # xmls/mjx_scene.xml. Both use Intel D405 intrinsics: focal=1.93mm,
-        # sensor=3.896x2.140mm. Vertical FOV = 2*atan(2.140 / (2*1.93)) ~= 1.0123 rad.
-        # The MJCF defines them via (pos, quat) where each quat is a pitch
-        # about world X. MuJoCo cameras look down -Z (local); SAPIEN cameras
-        # look down +X. We sidestep the convention conversion by precomputing
-        # equivalent (eye, target) pairs and using sapien_utils.look_at.
-        # Targets are eye + 1m along the pitched -Z axis.
+        # All four ALOHA cameras (overhead, worms-eye, left wrist, right wrist)
+        # use Intel D405 intrinsics: focal=1.93mm, sensor=3.896x2.140mm.
+        # Vertical FOV = 2*atan(2.140 / (2*1.93)) ~= 1.0123 rad.
+        # MuJoCo cameras look down -Z (local) with +Y up; SAPIEN cameras look
+        # down +X (local) with +Z up. We sidestep this convention conversion
+        # by precomputing equivalent (eye, target, up) triples and using
+        # sapien_utils.look_at - which works in any frame, including a link's
+        # local frame for mounted cameras.
         d405_fov_y = 1.0123
+
+        # ---- Workstation cameras (world-fixed, from xmls/mjx_scene.xml) ----
+        # overhead_cam: pos=(0, -0.303794, 1.02524), quat about X by 25 deg.
+        #   forward = R_x(0.4366) * (0,0,-1) = (0, 0.4226, -0.9063)
         overhead_pose = sapien_utils.look_at(
             eye=[0.0, -0.303794, 1.02524],
             target=[0.0, 0.118806, 0.119240],
         )
+        # worms_eye_cam: pos=(0, -0.377167, 0.0316055), quat about X by 95.5 deg.
+        #   forward = R_x(1.6664) * (0,0,-1) = (0, 0.9954, 0.0959)
         worms_eye_pose = sapien_utils.look_at(
             eye=[0.0, -0.377167, 0.0316055],
             target=[0.0, 0.618233, 0.127506],
         )
+
+        # ---- Wrist cameras (mounted to gripper_base link of each arm) ----
+        # Source MJCF: pos=(0, -0.0824748, -0.0095955), euler=(2.70525955359, 0, 0)
+        # in the gripper_base body frame. The euler is a single rotation about
+        # X by ~155 deg. Computing the resulting MuJoCo camera axes in the
+        # link's local frame:
+        #   look (-Z_mj after rotation) = (0, sin155, -(-cos155)) = (0, 0.4226, 0.9063)
+        #   up   (+Y_mj after rotation) = (0, cos155,    sin155 ) = (0, -0.9063, 0.4226)
+        # eye + look*1.0 gives a target 1m forward of the camera; SAPIEN's
+        # look_at handles the camera-frame conversion.
+        wrist_eye = [0.0, -0.0824748, -0.0095955]
+        wrist_target = [0.0, -0.0824748 + 0.4226, -0.0095955 + 0.9063]
+        wrist_up = (0.0, -0.9063, 0.4226)
+        wrist_local_pose = sapien_utils.look_at(
+            eye=wrist_eye, target=wrist_target, up=wrist_up
+        )
+
         return [
             CameraConfig(
                 "overhead_cam", overhead_pose, 128, 128, d405_fov_y, 0.01, 100,
             ),
             CameraConfig(
                 "worms_eye_cam", worms_eye_pose, 128, 128, d405_fov_y, 0.01, 100,
+            ),
+            CameraConfig(
+                "wrist_cam_left", wrist_local_pose, 128, 128, d405_fov_y, 0.01, 100,
+                mount=self.robot.links_map["left/gripper_base"],
+            ),
+            CameraConfig(
+                "wrist_cam_right", wrist_local_pose, 128, 128, d405_fov_y, 0.01, 100,
+                mount=self.robot.links_map["right/gripper_base"],
             ),
         ]
 
