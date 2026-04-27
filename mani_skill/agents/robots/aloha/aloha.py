@@ -6,7 +6,8 @@ from mani_skill import PACKAGE_ASSET_DIR
 from mani_skill.agents.base_agent import BaseAgent, Keyframe
 from mani_skill.agents.controllers import *
 from mani_skill.agents.registration import register_agent
-from mani_skill.utils import common
+from mani_skill.sensors.camera import CameraConfig
+from mani_skill.utils import common, sapien_utils
 from mani_skill.utils.structs.actor import Actor
 
 
@@ -69,6 +70,34 @@ class Aloha(BaseAgent):
             pose=sapien.Pose(),
         )
     )
+
+    @property
+    def _sensor_configs(self):
+        # ALOHA workstation cameras (overhead + worms-eye), mirrored from
+        # xmls/mjx_scene.xml. Both use Intel D405 intrinsics: focal=1.93mm,
+        # sensor=3.896x2.140mm. Vertical FOV = 2*atan(2.140 / (2*1.93)) ~= 1.0123 rad.
+        # The MJCF defines them via (pos, quat) where each quat is a pitch
+        # about world X. MuJoCo cameras look down -Z (local); SAPIEN cameras
+        # look down +X. We sidestep the convention conversion by precomputing
+        # equivalent (eye, target) pairs and using sapien_utils.look_at.
+        # Targets are eye + 1m along the pitched -Z axis.
+        d405_fov_y = 1.0123
+        overhead_pose = sapien_utils.look_at(
+            eye=[0.0, -0.303794, 1.02524],
+            target=[0.0, 0.118806, 0.119240],
+        )
+        worms_eye_pose = sapien_utils.look_at(
+            eye=[0.0, -0.377167, 0.0316055],
+            target=[0.0, 0.618233, 0.127506],
+        )
+        return [
+            CameraConfig(
+                "overhead_cam", overhead_pose, 128, 128, d405_fov_y, 0.01, 100,
+            ),
+            CameraConfig(
+                "worms_eye_cam", worms_eye_pose, 128, 128, d405_fov_y, 0.01, 100,
+            ),
+        ]
 
     @property
     def _controller_configs(self):

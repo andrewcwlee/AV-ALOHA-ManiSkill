@@ -232,6 +232,10 @@ class PickCubeAlohaEnv(PickCubeEnv):
     aluminum-extrusion frame, and the right arm as the primary manipulator
     (``self.agent.tcp`` is aliased to ``right_tcp`` inside the Aloha class).
     The left arm is present and idle, available for future bimanual tasks.
+
+    The overhead and worms-eye D405 sensor cameras are defined on the
+    :class:`Aloha` agent class, so they're attached to any task that uses
+    the ``aloha`` robot.
     """
 
     def __init__(self, *args, **kwargs):
