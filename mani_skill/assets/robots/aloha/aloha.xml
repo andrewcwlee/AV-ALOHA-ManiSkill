@@ -62,7 +62,12 @@
         <geom type="mesh" mass="0" group="2" material="black" contype="0" conaffinity="0" />
       </default>
       <default class="collision">
-        <geom group="4" type="mesh" contype="0" conaffinity="0" />
+        <!-- Source MJCF uses contype=0 conaffinity=0 (MJX disables mesh-mesh
+             collision for perf and only collides via primitive shapes).
+             ManiSkill's MJCF loader interprets contype=0 as "skip collision",
+             so we set contype=1 here to actually generate collision shapes.
+             Self-collisions are filtered separately by Aloha.disable_self_collisions=True. -->
+        <geom group="4" type="mesh" contype="1" conaffinity="1" />
         <default class="finger_collision">
           <geom condim="3" solimp="0.99 0.995 0.01" solref="0.01 1" friction="1 0.005 0.0001" />
         </default>
@@ -70,7 +75,7 @@
           <geom type="sphere" size="0.0006" rgba="1 0 0 1" />
         </default>
         <default class="primitive_collision">
-          <geom contype="0" conaffinity="1" rgba="1 0 0 0.5" group="3" condim="3" solref="0.01 1" friction="1 0.005 0.0001" />
+          <geom contype="1" conaffinity="1" rgba="1 0 0 0.5" group="3" condim="3" solref="0.01 1" friction="1 0.005 0.0001" />
         </default>
       </default>
     </default>
