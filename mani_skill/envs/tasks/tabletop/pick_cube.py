@@ -5,7 +5,7 @@ import sapien
 import torch
 
 import mani_skill.envs.utils.randomization as randomization
-from mani_skill.agents.robots import SO100, Fetch, Panda, WidowXAI, XArm6Robotiq
+from mani_skill.agents.robots import SO100, Aloha, Fetch, Panda, WidowXAI, XArm6Robotiq
 from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.envs.tasks.tabletop.pick_cube_cfgs import PICK_CUBE_CONFIGS
 from mani_skill.sensors.camera import CameraConfig
@@ -40,8 +40,9 @@ class PickCubeEnv(BaseEnv):
         "xarm6_robotiq",
         "so100",
         "widowxai",
+        "aloha",
     ]
-    agent: Union[Panda, Fetch, XArm6Robotiq, SO100, WidowXAI]
+    agent: Union[Panda, Fetch, XArm6Robotiq, SO100, WidowXAI, Aloha]
     goal_thresh = 0.025
     cube_spawn_half_size = 0.05
     cube_spawn_center = (0, 0)
@@ -179,6 +180,13 @@ class PickCubeEnv(BaseEnv):
             qvel = qvel[..., :-2]
         elif self.robot_uids == "so100":
             qvel = qvel[..., :-1]
+        elif self.robot_uids == "aloha":
+            # 16 active joints; drop the 4 finger joints from the static check.
+            arm_idx = [
+                self.agent.robot.active_joints_map[n].active_index[0].item()
+                for n in self.agent.left_arm_joint_names + self.agent.right_arm_joint_names
+            ]
+            qvel = qvel[..., arm_idx]
         static_reward = 1 - torch.tanh(5 * torch.linalg.norm(qvel, axis=1))
         reward += static_reward * info["is_obj_placed"]
 
@@ -214,3 +222,52 @@ class PickCubeWidowXAIEnv(PickCubeEnv):
 
 
 PickCubeWidowXAIEnv.__doc__ = PICK_CUBE_DOC_STRING.format(robot_id="WidowXAI")
+
+
+@register_env("PickCubeAloha-v1", max_episode_steps=50)
+class PickCubeAlohaEnv(PickCubeEnv):
+    """ALOHA bimanual variant of PickCube.
+
+    Uses :class:`AlohaTableSceneBuilder` for the workstation table + overhead
+    aluminum-extrusion frame, and the right arm as the primary manipulator
+    (``self.agent.tcp`` is aliased to ``right_tcp`` inside the Aloha class).
+    The left arm is present and idle, available for future bimanual tasks.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, robot_uids="aloha", **kwargs)
+
+    def _load_agent(self, options: dict):
+        # MJCF places each arm base at (+/-0.469, -0.019, 0.02), so the articulation
+        # root sits at the world origin (not offset by -0.615 like single-arm bots).
+        super(PickCubeEnv, self)._load_agent(options, sapien.Pose(p=[0, 0, 0]))
+
+    def _load_scene(self, options: dict):
+        from mani_skill.utils.scene_builder.aloha_table.scene_builder import (
+            AlohaTableSceneBuilder,
+        )
+
+        self.table_scene = AlohaTableSceneBuilder(
+            self, robot_init_qpos_noise=self.robot_init_qpos_noise
+        )
+        self.table_scene.build()
+        self.cube = actors.build_cube(
+            self.scene,
+            half_size=self.cube_half_size,
+            color=[1, 0, 0, 1],
+            name="cube",
+            initial_pose=sapien.Pose(p=[0, 0, self.cube_half_size]),
+        )
+        self.goal_site = actors.build_sphere(
+            self.scene,
+            radius=self.goal_thresh,
+            color=[0, 1, 0, 1],
+            name="goal_site",
+            body_type="kinematic",
+            add_collision=False,
+            initial_pose=sapien.Pose(),
+        )
+        self._hidden_objects.append(self.goal_site)
+
+
+PickCubeAlohaEnv.__doc__ = PICK_CUBE_DOC_STRING.format(robot_id="Aloha")

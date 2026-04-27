@@ -1,4 +1,5 @@
 from .allegro_hand import *
+from .aloha import Aloha
 from .anymal import ANYmalC
 from .dclaw import DClaw
 from .fetch import Fetch

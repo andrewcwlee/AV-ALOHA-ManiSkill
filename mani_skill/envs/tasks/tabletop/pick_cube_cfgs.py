@@ -67,4 +67,19 @@ PICK_CUBE_CONFIGS = {
         "human_cam_eye_pos": [0.45, 0.5, 0.5],
         "human_cam_target_pos": [-0.2, 0.0, 0.2],
     },
+    # ALOHA bimanual: arm bases at (+/-0.469, -0.019, 0.02) in the MJCF.
+    # AlohaTableSceneBuilder builds a custom table sized to the original
+    # ALOHA workstation (1.22 x 0.74 m) so the frame fits naturally with no
+    # rig offset; the cube spawns in front of the right arm (the default TCP).
+    "aloha": {
+        "cube_half_size": 0.02,
+        "goal_thresh": 0.025,
+        "cube_spawn_half_size": 0.05,
+        "cube_spawn_center": (0.2, 0.0),
+        "max_goal_height": 0.2,
+        "sensor_cam_eye_pos": [0.0, -0.4, 0.6],
+        "sensor_cam_target_pos": [0.0, 0.0, 0.05],
+        "human_cam_eye_pos": [0.6, -0.6, 0.6],
+        "human_cam_target_pos": [0.0, 0.0, 0.15],
+    },
 }
