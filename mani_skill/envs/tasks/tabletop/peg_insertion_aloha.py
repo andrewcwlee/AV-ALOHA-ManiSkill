@@ -143,6 +143,11 @@ class PegInsertionAlohaEnv(BaseEnv):
         self.table_scene.build()
         self.socket = _build_socket(self.scene)
         self.peg = _build_peg(self.scene)
+        # Cache the home arm-pose target (used every reward call) so we don't
+        # rebuild a (num_envs, 16) numpy + .to(device) on each step.
+        self._home_qpos_t = torch.tensor(
+            self._home_qpos(self.num_envs), device=self.device
+        )
 
     # ------------------------------------------------------------------ #
     # Episode lifecycle
@@ -268,78 +273,69 @@ class PegInsertionAlohaEnv(BaseEnv):
         return torch.where(in_band, torch.ones_like(x), falloff)
 
     def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: dict):
-        # Reproduce the per-component reward stack from the source.
-        b = self.num_envs
-        left_tcp = self.agent.left_tcp.pose.p
-        right_tcp = self.agent.right_tcp.pose.p
+        """Stage-gated reward modeled after ManiSkill's PegInsertionSide.
+
+        Each stage's reward is multiplied by the boolean of all prior stages
+        being satisfied, so the policy can only collect later-stage signal once
+        it has cleared the earlier stages. Magnitudes increase per stage so the
+        value function has a clear ordering.
+
+        Stages:
+          1. Reach: left arm to socket, right arm to peg (continuous).
+          2. Grasp: bonus when each arm closes its gripper on the right object.
+          3. Lift: bring both objects to the goal poses (only when both grasped).
+          4. Align: peg_end2 close to the socket axis (only when both grasped).
+          5. Insert: peg_end2 deep inside socket (only when grasped + aligned).
+          Success: constant 14 (matches max accumulated stage sum).
+        """
         socket_pos = self.socket.pose.p
         peg_pos = self.peg.pose.p
+        left_tcp = self.agent.left_tcp.pose.p
+        right_tcp = self.agent.right_tcp.pose.p
 
+        # ---- Stage 1: Reach (max 1.0 total) ----
         left_dist = torch.linalg.norm(socket_pos - left_tcp, axis=-1)
         right_dist = torch.linalg.norm(peg_pos - right_tcp, axis=-1)
-        left_reward = self._tolerance(left_dist, 0.0, 0.001, margin=0.3)
-        right_reward = self._tolerance(right_dist, 0.0, 0.001, margin=0.3)
+        left_reach = 1.0 - torch.tanh(4.0 * left_dist)
+        right_reach = 1.0 - torch.tanh(4.0 * right_dist)
+        reward = 0.5 * (left_reach + right_reach)
 
-        # Stay close to the home arm pose.
-        qpos = self.agent.robot.get_qpos()
-        home_qpos_t = torch.tensor(self._home_qpos(b), device=self.device)
-        diff = qpos - home_qpos_t
-        # Slice off finger joints (indices for arm joints only)
-        arm_idx = [
-            self.agent.robot.active_joints_map[n].active_index[0].item()
-            for n in self.agent.left_arm_joint_names + self.agent.right_arm_joint_names
-        ]
-        arm_diff = diff[..., arm_idx]
-        left_pose_err = torch.linalg.norm(arm_diff[..., :6], axis=-1)
-        right_pose_err = torch.linalg.norm(arm_diff[..., 6:], axis=-1)
-        left_pose_r = self._tolerance(left_pose_err, 0.0, 0.01, margin=2.0)
-        right_pose_r = self._tolerance(right_pose_err, 0.0, 0.01, margin=2.0)
+        # ---- Stage 2: Grasp (max +2.0) ----
+        # Per-arm contact-force grasp check (left holds socket, right holds peg).
+        left_grasped = self.agent.is_grasping(self.socket, arm="left")
+        right_grasped = self.agent.is_grasping(self.peg, arm="right")
+        reward = reward + left_grasped.float() + right_grasped.float()
+        both_grasped = left_grasped & right_grasped
 
-        socket_lift_dist = torch.linalg.norm(
-            torch.tensor(self.socket_goal_pos, device=self.device) - socket_pos, axis=-1
+        # ---- Stage 3: Lift to goal positions (max +3.0, gated by both_grasped) ----
+        socket_goal = torch.tensor(self.socket_goal_pos, device=self.device)
+        peg_goal = torch.tensor(self.peg_goal_pos, device=self.device)
+        socket_lift_dist = torch.linalg.norm(socket_pos - socket_goal, axis=-1)
+        peg_lift_dist = torch.linalg.norm(peg_pos - peg_goal, axis=-1)
+        lift_reward = 3.0 * (
+            1.0 - torch.tanh(2.0 * (socket_lift_dist + peg_lift_dist))
         )
-        peg_lift_dist = torch.linalg.norm(
-            torch.tensor(self.peg_goal_pos, device=self.device) - peg_pos, axis=-1
-        )
-        socket_lift = self._tolerance(socket_lift_dist, 0.0, 0.01, margin=0.15)
-        peg_lift = self._tolerance(peg_lift_dist, 0.0, 0.01, margin=0.15)
+        reward = reward + lift_reward * both_grasped.float()
 
-        z_world = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        socket_orient = (self._z_axis(self.socket) * z_world).sum(dim=-1)
-        peg_orient = (self._z_axis(self.peg) * z_world).sum(dim=-1)
-        socket_orient_r = self._tolerance(socket_orient, 0.99, 1.0, margin=0.03)
-        peg_orient_r = self._tolerance(peg_orient, 0.99, 1.0, margin=0.03)
-
-        # Hand-table collision: query the AlohaTableSceneBuilder's table.
-        table_collision = self._finger_table_collision_flag()
-        no_table_collision = 1.0 - table_collision
-
-        # Insertion reward gated on alignment with the socket axis.
+        # ---- Stage 4: Align peg with socket axis (max +3.0, gated by both_grasped) ----
         peg_end2 = self._site_pos(self.peg, self.PEG_END2_LOCAL)
         socket_rear = self._site_pos(self.socket, self.SOCKET_REAR_LOCAL)
-        insertion_dist = torch.linalg.norm(peg_end2 - socket_rear, axis=-1)
-        gate = (self._peg_dist_to_socket_axis(peg_end2) < self.insertion_align_thresh).float()
-        insertion_r = self._tolerance(insertion_dist, 0.0, 0.001, margin=0.1) * gate
+        axis_dist = self._peg_dist_to_socket_axis(peg_end2)
+        align_reward = 3.0 * (1.0 - torch.tanh(20.0 * axis_dist))
+        reward = reward + align_reward * both_grasped.float()
+        pre_inserted = (axis_dist < self.insertion_align_thresh) & both_grasped
 
-        components = {
-            "left_reward": left_reward,
-            "right_reward": right_reward,
-            "left_target_qpos": left_pose_r * left_reward * right_reward,
-            "right_target_qpos": right_pose_r * left_reward * right_reward,
-            "no_table_collision": no_table_collision,
-            "socket_entrance_reward": socket_lift,
-            "peg_end2_reward": peg_lift,
-            "socket_z_up": socket_orient_r * socket_lift,
-            "peg_z_up": peg_orient_r * peg_lift,
-            "peg_insertion_reward": insertion_r,
-        }
-        reward = sum(_REWARD_SCALES[k] * v for k, v in components.items())
-        reward = reward / sum(_REWARD_SCALES.values())
+        # ---- Stage 5: Insert peg deep into socket (max +5.0, gated on pre_inserted) ----
+        insertion_dist = torch.linalg.norm(peg_end2 - socket_rear, axis=-1)
+        insertion_reward = 5.0 * (1.0 - torch.tanh(10.0 * insertion_dist))
+        reward = reward + insertion_reward * pre_inserted.float()
+
+        # ---- Success bonus replaces accumulated reward (matches PegInsertionSide pattern) ----
+        reward = torch.where(info["success"], torch.full_like(reward, 14.0), reward)
         return reward
 
     def compute_normalized_dense_reward(self, obs, action, info):
-        # Already in [0, 1] by construction (sum-of-scales normalization).
-        return self.compute_dense_reward(obs, action, info)
+        return self.compute_dense_reward(obs, action, info) / 14.0
 
     def _finger_table_collision_flag(self) -> torch.Tensor:
         """Return 1.0 if any finger link is in contact with the table, else 0.0."""
