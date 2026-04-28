@@ -86,7 +86,7 @@ def _build_peg(scene, name="peg"):
     return builder.build(name=name)
 
 
-@register_env("PegInsertionAloha-v1", max_episode_steps=1000)
+@register_env("PegInsertionAloha-v1", max_episode_steps=200)
 class PegInsertionAlohaEnv(BaseEnv):
     """Bimanual peg-insertion task on the ALOHA workstation.
 
