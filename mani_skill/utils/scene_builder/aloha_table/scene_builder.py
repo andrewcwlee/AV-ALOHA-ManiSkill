@@ -220,10 +220,13 @@ class AlohaTableSceneBuilder(TableSceneBuilder):
             "right/forearm_roll": 0.0,
             "right/wrist_angle": -0.3,
             "right/wrist_rotate": 0.0,
-            "left/left_finger": 0.02,
-            "left/right_finger": 0.02,
-            "right/left_finger": 0.02,
-            "right/right_finger": 0.02,
+            # Start fully open so PPO begins with room around the object;
+            # otherwise action=0 maps to mid-open == rest, and the policy
+            # never learns to open (or to close around a cube ~40mm wide).
+            "left/left_finger": 0.037,
+            "left/right_finger": 0.037,
+            "right/left_finger": 0.037,
+            "right/right_finger": 0.037,
         }
         for jname, val in rest_per_joint.items():
             j = agent.robot.active_joints_map.get(jname)

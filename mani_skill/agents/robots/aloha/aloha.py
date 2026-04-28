@@ -170,11 +170,14 @@ class Aloha(BaseAgent):
         )
 
         # Two control joints (left/left_finger, right/left_finger) drive the two
-        # mimic joints (left/right_finger, right/right_finger).
+        # mimic joints (left/right_finger, right/right_finger). lower goes
+        # negative (below the physical 0.002 limit) so the PD controller has
+        # extra "squeeze force" when contact stops the joint from reaching
+        # target -- matches the trick used in Panda.
         gripper_pd_joint_pos = PDJointPosMimicControllerConfig(
             self.gripper_joint_names,
-            lower=0.002,
-            upper=0.037,
+            lower=-0.01,
+            upper=0.04,
             stiffness=self.gripper_stiffness,
             damping=self.gripper_damping,
             force_limit=self.gripper_force_limit,
